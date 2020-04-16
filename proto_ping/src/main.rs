@@ -104,7 +104,7 @@ fn ping(dest: IpAddr, ttl5: Duration) -> (i64, i32) {
 	let (mut sender, mut receiver) = match transport_channel(BUFFER_SIZE, channel_type) {
 		Ok((sender, receiver)) => (sender, receiver),
 		Err(e) => {
-			println!("***{}. Try using sudo",e.to_string());
+			println!("***{}.",e.to_string());
 			exit(0);
 		},
 	};

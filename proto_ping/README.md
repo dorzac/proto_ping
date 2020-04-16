@@ -20,6 +20,3 @@ OPTIONS:
 ARGS:
     <tgt_ip>        IP address
 ```
-
-###Troubleshooting
-It's possible that on some OSs, opening a transport channel gets blocked. Try with `sudo`
