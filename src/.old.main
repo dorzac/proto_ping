@@ -1,0 +1,161 @@
+use std::thread;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::time::{Duration, Instant};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicI32, AtomicBool, Ordering};
+use std::process::exit;
+use structopt::StructOpt;
+use pnet::util;
+use pnet::packet::Packet;
+use pnet::packet::ip::IpNextHeaderProtocols;
+use pnet::packet::icmp::{IcmpTypes};
+use pnet::packet::icmp::{echo_request};
+use pnet::packet::icmpv6::{Icmpv6Types, MutableIcmpv6Packet};
+use pnet::transport::transport_channel;
+use pnet::transport::TransportSender;
+use pnet::transport::icmp_packet_iter;
+use pnet::transport::TransportChannelType::Layer4;
+use pnet::transport::TransportProtocol::{Ipv4, Ipv6};
+
+const TTL: u8 = 54;
+const TTL5: Duration = Duration::from_millis(54*5);
+const BUFFER_SIZE: usize = 4096;
+const PKT_SIZE: usize = 64;
+
+#[derive(StructOpt)]
+struct Arguments {
+	tgt: String,
+}
+
+fn main() {
+
+	let dest = IpAddr::V4(Ipv4Addr::LOCALHOST);
+	let dest = IpAddr::V4(Ipv4Addr::new(192, 29, 6, 8));
+	let dest = IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8));
+
+	loop {
+		pingv4(dest);
+	}
+
+}
+fn pingv4(dest: IpAddr) {
+
+	//Construct a channel for sending and receiving
+	let channel_type = Layer4(Ipv4(IpNextHeaderProtocols::Icmp));
+	let (mut sender, mut receiver) = match transport_channel(BUFFER_SIZE, channel_type) {
+		Ok((sender, receiver)) => (sender, receiver),
+		Err(e) => {
+			println!("***{}",e.to_string());
+			return;
+		},
+	};
+	sender.set_ttl(TTL).unwrap();
+
+	let num_packets = Arc::new(AtomicI32::new(-1));
+	let num_packets_copy = Arc::clone(&num_packets);
+	let done_sending = Arc::new(AtomicBool::new(true));
+	let done_sending_copy = Arc::clone(&done_sending);
+	
+	let start = Instant::now();
+
+	// SENDER
+	let done = &done_sending;
+	let packets_sent = &num_packets;
+
+	let num_packets = 5;
+	for x in 0..num_packets {
+		send(&mut sender, dest);
+	}
+	
+	done.swap(false, Ordering::Relaxed);
+	packets_sent.swap(num_packets, Ordering::Relaxed);	
+
+	// LISTENER
+	let listener_thread = thread::spawn(move || {
+
+		let start = Instant::now();
+		
+		let done = &done_sending_copy;
+		let received_packets = &num_packets_copy;
+		let mut iter = icmp_packet_iter(&mut receiver);
+		let mut count = 0;
+		while count < 5 && (start.elapsed() < TTL5 || done.load(Ordering::Relaxed)) {
+			thread::sleep(Duration::from_millis(24));
+			iter.next().unwrap();
+			count += 1;
+			//If time exceeded, ignore the kill packet
+			if(start.elapsed() > TTL5) {
+				count -= 2;
+			}
+		}
+		
+		received_packets.swap(count, Ordering::Relaxed);
+	});
+
+	let early_time = start.elapsed().as_micros().to_string().parse::<i64>().unwrap();
+
+	while start.elapsed() < TTL5 {}
+	send(&mut sender, IpAddr::V4(Ipv4Addr::LOCALHOST));
+
+	listener_thread.join().unwrap();
+
+	let mut elapsed = start.elapsed().as_micros().to_string().parse::<i64>().unwrap();
+	if packets_sent.load(Ordering::Relaxed) == 5 {
+		elapsed = early_time;
+	}
+
+	println!("Complete. Took {} us, {}/5 packets", elapsed, packets_sent.load(Ordering::Relaxed));
+
+}
+
+
+
+fn send(sink: &mut TransportSender, address: IpAddr) {
+	let mut vec : Vec<u8> = vec![0; PKT_SIZE];
+
+	if address.is_ipv4() {
+
+	let mut pkt = echo_request::MutableEchoRequestPacket::new(&mut vec[..]).unwrap();
+
+	pkt.set_sequence_number(15);
+	pkt.set_identifier(12);
+	pkt.set_icmp_type(IcmpTypes::EchoRequest);
+
+	let csum = icmp_checksum(&pkt);
+	pkt.set_checksum(csum);
+
+	let status = match sink.send_to(pkt, address) {
+		Ok(status) => {
+			return;
+		}
+		Err(e) => {
+			println!("***{}",e.to_string());
+			return;
+		},
+	};
+
+	} else {
+		let mut pkt = MutableIcmpv6Packet::new(&mut vec[..]).unwrap();
+		pkt.set_icmpv6_type(Icmpv6Types::EchoRequest);
+		let csum = icmpv6_checksum(&pkt);
+		pkt.set_checksum(csum);
+		let _status = match sink.send_to(pkt, address) {
+			Ok(_status) => {
+				return;
+			}
+			Err(e) => {
+				println!("***{}",e.to_string());
+				println!("v6 error");
+				return;
+			},
+		};
+	}
+}
+
+fn icmp_checksum(packet: &echo_request::MutableEchoRequestPacket) -> u16 {
+	return util::checksum(packet.packet(),1);
+}
+
+fn icmpv6_checksum(packet: &MutableIcmpv6Packet) -> u16 {
+	return util::checksum(packet.packet(),1);
+}
