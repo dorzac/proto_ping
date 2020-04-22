@@ -130,7 +130,7 @@ fn ping(dest: IpAddr, ttl5: Duration) -> (i64, i32) {
 	// LISTENER
 	let listener_thread = thread::spawn(move || {
 
-		let start = Instant::now();
+		//let start = Instant::now();
 		let done = &done_sending_copy;
 		let received_packets = &num_packets_copy;
 		let mut iter = icmp_packet_iter(&mut receiver);
@@ -139,7 +139,7 @@ fn ping(dest: IpAddr, ttl5: Duration) -> (i64, i32) {
 			thread::sleep(Duration::from_millis(54));
 			iter.next().unwrap();
 			count += 1;
-			//If time exceeded, don't include kill packet echo
+			//If time exceeded, drop kill packet echo
 			if start.elapsed() > ttl5 {
 				count -= 2;
 			}
